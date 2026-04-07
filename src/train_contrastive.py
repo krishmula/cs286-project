@@ -54,6 +54,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-clip", type=float, default=DEFAULTS.grad_clip)
     parser.add_argument("--num-workers", type=int, default=DEFAULTS.num_workers)
     parser.add_argument("--device", type=str, default=None, help="Force a device, e.g. cpu, cuda, or mps.")
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=1,
+        help="Overwrite output-dir/latest_checkpoint.pt every N epochs. Set to 0 to disable periodic saves.",
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help="Resume optimizer/model state from a previous latest checkpoint.",
+    )
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--projection-hidden-dim", type=int, default=128)
     parser.add_argument("--projection-out-dim", type=int, default=64)
@@ -154,11 +166,55 @@ def evaluate_epoch(
     }
 
 
+def save_latest_checkpoint(
+    latest_checkpoint_path: Path,
+    *,
+    model: PhoneWatchContrastiveModel,
+    optimizer: torch.optim.Optimizer,
+    early_stopper: EarlyStopper,
+    best_state: dict[str, torch.Tensor] | None,
+    history: list[dict[str, float | int]],
+    label_to_index: dict[str, int],
+    checkpoint_config: dict[str, int | float | bool],
+    args: argparse.Namespace,
+    paths,
+    epoch: int,
+) -> None:
+    save_checkpoint(
+        latest_checkpoint_path,
+        {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_model_state_dict": best_state,
+            "early_stopper_state_dict": early_stopper.state_dict(),
+            "history": history,
+            "phone_encoder_state_dict": model.phone_encoder.state_dict(),
+            "watch_encoder_state_dict": model.watch_encoder.state_dict(),
+            "phone_projector_state_dict": model.phone_projector.state_dict(),
+            "watch_projector_state_dict": model.watch_projector.state_dict(),
+            "label_to_index": label_to_index,
+            "metadata": checkpoint_metadata(
+                experiment_name=args.experiment_name,
+                stage="contrastive",
+                config=checkpoint_config,
+                manifest_path=str(paths.windows_root / "manifest.json"),
+                extra={
+                    "description": args.description,
+                    "checkpoint_role": "latest",
+                    "checkpoint_epoch": epoch,
+                },
+            ),
+        },
+    )
+
+
 def main() -> None:
     args = parse_args()
     paths = resolve_project_paths(args.project_root)
     output_dir = (args.output_dir or (paths.artifacts_root / "contrastive")).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    latest_checkpoint_path = output_dir / "latest_checkpoint.pt"
 
     repository = WindowRepository(paths.windows_root)
     manifest = repository.manifest
@@ -193,7 +249,61 @@ def main() -> None:
     best_state: dict[str, torch.Tensor] | None = None
     history: list[dict[str, float | int]] = []
 
-    for epoch in range(1, args.epochs + 1):
+    checkpoint_config = {
+        "batch_size": args.batch_size,
+        "learning_rate": args.lr,
+        "weight_decay": args.weight_decay,
+        "epochs_requested": args.epochs,
+        "early_stopping_patience": args.patience,
+        "temperature": args.temperature,
+        "projection_hidden_dim": args.projection_hidden_dim,
+        "projection_out_dim": args.projection_out_dim,
+        "jitter_std": args.jitter_std,
+        "scale_min": args.scale_min,
+        "scale_max": args.scale_max,
+        "mask_ratio": args.mask_ratio,
+        "mask_length": args.mask_length,
+        "augmentations_enabled": not args.disable_augmentations,
+        "train_windows": len(train_split),
+        "val_windows": len(val_split),
+        "seed": args.seed,
+        "save_every": args.save_every,
+    }
+
+    start_epoch = 1
+    if args.resume_from is not None:
+        checkpoint = torch.load(args.resume_from, map_location="cpu", weights_only=False)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        early_stopper = EarlyStopper.from_state_dict(checkpoint["early_stopper_state_dict"])
+        best_state = checkpoint.get("best_model_state_dict")
+        history = [dict(entry) for entry in checkpoint.get("history", [])]
+        start_epoch = int(checkpoint["epoch"]) + 1
+        print(f"[{args.experiment_name}] resumed from {args.resume_from} at epoch {start_epoch}")
+
+    def build_checkpoint_payload(*, checkpoint_role: str, checkpoint_epoch: int | None) -> dict[str, object]:
+        return {
+            "model_state_dict": model.state_dict(),
+            "phone_encoder_state_dict": model.phone_encoder.state_dict(),
+            "watch_encoder_state_dict": model.watch_encoder.state_dict(),
+            "phone_projector_state_dict": model.phone_projector.state_dict(),
+            "watch_projector_state_dict": model.watch_projector.state_dict(),
+            "label_to_index": label_to_index,
+            "best_epoch": early_stopper.best_epoch,
+            "metadata": checkpoint_metadata(
+                experiment_name=args.experiment_name,
+                stage="contrastive",
+                config=checkpoint_config,
+                manifest_path=str(paths.windows_root / "manifest.json"),
+                extra={
+                    "description": args.description,
+                    "checkpoint_role": checkpoint_role,
+                    "checkpoint_epoch": checkpoint_epoch,
+                },
+            ),
+        }
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss = train_one_epoch(
             model=model,
             loader=train_loader,
@@ -222,54 +332,40 @@ def main() -> None:
         improved = early_stopper.update(val_metrics["loss"], epoch=epoch)
         if improved:
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+        if args.save_every > 0 and (epoch % args.save_every == 0 or epoch == args.epochs):
+            save_latest_checkpoint(
+                latest_checkpoint_path,
+                model=model,
+                optimizer=optimizer,
+                early_stopper=early_stopper,
+                best_state=best_state,
+                history=history,
+                label_to_index=label_to_index,
+                checkpoint_config=checkpoint_config,
+                args=args,
+                paths=paths,
+                epoch=epoch,
+            )
         if early_stopper.should_stop:
             print(f"[{args.experiment_name}] early stopping at epoch {epoch}")
             break
 
     if best_state is None:
         raise RuntimeError("Contrastive training completed without producing a best model state.")
-
-    checkpoint_config = {
-        "batch_size": args.batch_size,
-        "learning_rate": args.lr,
-        "weight_decay": args.weight_decay,
-        "epochs_requested": args.epochs,
-        "early_stopping_patience": args.patience,
-        "temperature": args.temperature,
-        "projection_hidden_dim": args.projection_hidden_dim,
-        "projection_out_dim": args.projection_out_dim,
-        "jitter_std": args.jitter_std,
-        "scale_min": args.scale_min,
-        "scale_max": args.scale_max,
-        "mask_ratio": args.mask_ratio,
-        "mask_length": args.mask_length,
-        "augmentations_enabled": not args.disable_augmentations,
-        "train_windows": len(train_split),
-        "val_windows": len(val_split),
-        "seed": args.seed,
-    }
-
-    def build_checkpoint_payload(*, checkpoint_role: str, checkpoint_epoch: int | None) -> dict[str, object]:
-        return {
-            "model_state_dict": model.state_dict(),
-            "phone_encoder_state_dict": model.phone_encoder.state_dict(),
-            "watch_encoder_state_dict": model.watch_encoder.state_dict(),
-            "phone_projector_state_dict": model.phone_projector.state_dict(),
-            "watch_projector_state_dict": model.watch_projector.state_dict(),
-            "label_to_index": label_to_index,
-            "best_epoch": early_stopper.best_epoch,
-            "metadata": checkpoint_metadata(
-                experiment_name=args.experiment_name,
-                stage="contrastive",
-                config=checkpoint_config,
-                manifest_path=str(paths.windows_root / "manifest.json"),
-                extra={
-                    "description": args.description,
-                    "checkpoint_role": checkpoint_role,
-                    "checkpoint_epoch": checkpoint_epoch,
-                },
-            ),
-        }
+    if not latest_checkpoint_path.exists():
+        save_latest_checkpoint(
+            latest_checkpoint_path,
+            model=model,
+            optimizer=optimizer,
+            early_stopper=early_stopper,
+            best_state=best_state,
+            history=history,
+            label_to_index=label_to_index,
+            checkpoint_config=checkpoint_config,
+            args=args,
+            paths=paths,
+            epoch=int(history[-1]["epoch"]),
+        )
 
     last_epoch = int(history[-1]["epoch"])
     last_train_metrics = evaluate_epoch(model=model, loader=train_loader, temperature=args.temperature, device=device)
@@ -305,6 +401,7 @@ def main() -> None:
         "artifacts": {
             "checkpoint_path": str(checkpoint_path),
             "last_checkpoint_path": str(last_checkpoint_path),
+            "latest_checkpoint_path": str(latest_checkpoint_path),
             "metrics_path": str(metrics_path),
         },
     }
@@ -318,6 +415,7 @@ def main() -> None:
                 "metrics_path": str(metrics_path),
                 "checkpoint_path": str(checkpoint_path),
                 "last_checkpoint_path": str(last_checkpoint_path),
+                "latest_checkpoint_path": str(latest_checkpoint_path),
             },
             indent=2,
         )

@@ -51,6 +51,32 @@ class EarlyStopper:
             return score > (self.best_score + self.min_delta)
         return score < (self.best_score - self.min_delta)
 
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "patience": self.patience,
+            "mode": self.mode,
+            "min_delta": self.min_delta,
+            "best_score": self.best_score,
+            "best_epoch": self.best_epoch,
+            "epochs_without_improvement": self.epochs_without_improvement,
+            "should_stop": self.should_stop,
+            "history": list(self.history),
+        }
+
+    @classmethod
+    def from_state_dict(cls, state: Mapping[str, Any]) -> "EarlyStopper":
+        stopper = cls(
+            patience=int(state["patience"]),
+            mode=str(state.get("mode", "max")),
+            min_delta=float(state.get("min_delta", 0.0)),
+        )
+        stopper.best_score = None if state.get("best_score") is None else float(state["best_score"])
+        stopper.best_epoch = None if state.get("best_epoch") is None else int(state["best_epoch"])
+        stopper.epochs_without_improvement = int(state.get("epochs_without_improvement", 0))
+        stopper.should_stop = bool(state.get("should_stop", False))
+        stopper.history = [dict(entry) for entry in state.get("history", [])]
+        return stopper
+
 
 def checkpoint_metadata(
     *,

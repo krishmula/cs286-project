@@ -55,6 +55,19 @@ class EarlyStopperTests(unittest.TestCase):
         self.assertEqual(stopper.best_score, 0.5)
         self.assertEqual(len(stopper.history), 3)
 
+    def test_early_stopper_state_dict_round_trip(self) -> None:
+        stopper = EarlyStopper(patience=3, mode="min", min_delta=0.1)
+        stopper.update(1.0, epoch=1)
+        stopper.update(1.05, epoch=2)
+        restored = EarlyStopper.from_state_dict(stopper.state_dict())
+
+        self.assertEqual(restored.patience, 3)
+        self.assertEqual(restored.mode, "min")
+        self.assertEqual(restored.min_delta, 0.1)
+        self.assertEqual(restored.best_epoch, 1)
+        self.assertEqual(restored.epochs_without_improvement, 1)
+        self.assertEqual(restored.history, stopper.history)
+
 
 class CheckpointTests(unittest.TestCase):
     def test_save_and_load_checkpoint_round_trip(self) -> None:

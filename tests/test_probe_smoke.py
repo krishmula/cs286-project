@@ -12,7 +12,7 @@ import torch
 from torch import nn
 
 from src.models import PhoneWatchContrastiveModel
-from src.training import LinearProbeHead, freeze_module, train_probe_epoch
+from src.training import LinearProbeHead, freeze_module, load_checkpoint, train_probe_epoch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -89,11 +89,12 @@ class ProbeSmokeTests(unittest.TestCase):
                 per_subject_files = sorted(mode_dir.glob("*_per_subject_accuracy.csv"))
 
                 self.assertEqual(len(metrics_files), 1)
-                self.assertEqual(len(checkpoint_files), 1)
+                self.assertEqual(len(checkpoint_files), 2)
                 self.assertEqual(len(confusion_files), 1)
                 self.assertEqual(len(per_subject_files), 1)
 
                 metrics = json.loads(metrics_files[0].read_text())
+                latest_checkpoint = load_checkpoint(Path(metrics["artifacts"]["latest_checkpoint_path"]))
                 self.assertEqual(metrics["probe_mode"], mode)
                 self.assertEqual(metrics["label_fraction"], 0.1)
                 self.assertEqual(metrics["config"]["train_windows_used"], 64)
@@ -101,6 +102,7 @@ class ProbeSmokeTests(unittest.TestCase):
                 self.assertEqual(metrics["config"]["test_windows"], 32)
                 self.assertIn("accuracy", metrics["test"])
                 self.assertIn("macro_f1", metrics["test"])
+                self.assertEqual(latest_checkpoint["metadata"]["checkpoint_role"], "latest")
 
     def test_frozen_encoder_weights_do_not_change_during_probe_head_training(self) -> None:
         torch.manual_seed(42)

@@ -56,6 +56,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=DEFAULTS.early_stopping_patience)
     parser.add_argument("--num-workers", type=int, default=DEFAULTS.num_workers)
     parser.add_argument("--device", type=str, default=None, help="Force a device, e.g. cpu, cuda, or mps.")
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=1,
+        help="Overwrite output-dir/latest_checkpoint.pt every N epochs. Set to 0 to disable periodic saves.",
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help="Resume optimizer/head state from a previous latest checkpoint.",
+    )
     parser.add_argument("--max-train-windows", type=int, default=None)
     parser.add_argument("--max-val-windows", type=int, default=None)
     parser.add_argument("--max-test-windows", type=int, default=None)
@@ -105,11 +117,77 @@ def write_subject_accuracy(path: Path, per_subject_accuracy: dict[int, float]) -
             writer.writerow({"subject_id": subject_id, "accuracy": accuracy})
 
 
+def save_latest_checkpoint(
+    latest_checkpoint_path: Path,
+    *,
+    head: LinearProbeHead,
+    optimizer: torch.optim.Optimizer,
+    early_stopper: EarlyStopper,
+    best_state: dict[str, torch.Tensor] | None,
+    history: list[dict[str, float | int]],
+    label_to_index: dict[str, int],
+    args: argparse.Namespace,
+    experiment_name: str,
+    description: str,
+    paths,
+    train_features,
+    train_split: CachedSplitData,
+    val_split: CachedSplitData,
+    test_split: CachedSplitData,
+    repository: WindowRepository,
+    contrastive_checkpoint: dict,
+    epoch: int,
+) -> None:
+    save_checkpoint(
+        latest_checkpoint_path,
+        {
+            "epoch": epoch,
+            "linear_head_state_dict": head.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_linear_head_state_dict": best_state,
+            "early_stopper_state_dict": early_stopper.state_dict(),
+            "history": history,
+            "probe_mode": args.evaluation_mode,
+            "label_fraction": args.label_fraction,
+            "encoder_checkpoint_path": str(args.encoder_ckpt_path.resolve()),
+            "label_to_index": label_to_index,
+            "metadata": checkpoint_metadata(
+                experiment_name=experiment_name,
+                stage="probe",
+                config={
+                    "batch_size": args.batch_size,
+                    "learning_rate": args.lr,
+                    "weight_decay": args.weight_decay,
+                    "epochs_requested": args.epochs,
+                    "early_stopping_patience": args.patience,
+                    "evaluation_mode": args.evaluation_mode,
+                    "label_fraction": args.label_fraction,
+                    "input_dim": int(train_features.x.shape[1]),
+                    "train_windows_available": len(repository.load_split("train")),
+                    "train_windows_used": len(train_split),
+                    "val_windows": len(val_split),
+                    "test_windows": len(test_split),
+                    "seed": args.seed,
+                    "contrastive_experiment_name": contrastive_checkpoint.get("metadata", {}).get("experiment_name"),
+                    "save_every": args.save_every,
+                },
+                manifest_path=str(paths.windows_root / "manifest.json"),
+                extra={
+                    "description": description,
+                    "checkpoint_role": "latest",
+                    "checkpoint_epoch": epoch,
+                },
+            ),
+        },
+    )
+
+
 def main() -> None:
     args = parse_args()
     paths = resolve_project_paths(args.project_root)
     output_dir = (args.output_dir or (paths.artifacts_root / "probes")).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    latest_checkpoint_path = output_dir / "latest_checkpoint.pt"
 
     repository = WindowRepository(paths.windows_root)
     label_to_index = repository.manifest["label_to_index"]
@@ -170,7 +248,18 @@ def main() -> None:
     best_state: dict[str, torch.Tensor] | None = None
     history: list[dict[str, float | int]] = []
 
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if args.resume_from is not None:
+        checkpoint = torch.load(args.resume_from, map_location="cpu", weights_only=False)
+        head.load_state_dict(checkpoint["linear_head_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        early_stopper = EarlyStopper.from_state_dict(checkpoint["early_stopper_state_dict"])
+        best_state = checkpoint.get("best_linear_head_state_dict")
+        history = [dict(entry) for entry in checkpoint.get("history", [])]
+        start_epoch = int(checkpoint["epoch"]) + 1
+        print(f"[{experiment_name}] resumed from {args.resume_from} at epoch {start_epoch}")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss = train_probe_epoch(head=head, loader=train_loader, optimizer=optimizer, loss_fn=loss_fn, device=device)
         val_metrics = evaluate_probe(
             head=head,
@@ -197,12 +286,54 @@ def main() -> None:
         improved = early_stopper.update(float(val_metrics["macro_f1"]), epoch=epoch)
         if improved:
             best_state = {key: value.detach().cpu().clone() for key, value in head.state_dict().items()}
+        if args.save_every > 0 and (epoch % args.save_every == 0 or epoch == args.epochs):
+            save_latest_checkpoint(
+                latest_checkpoint_path,
+                head=head,
+                optimizer=optimizer,
+                early_stopper=early_stopper,
+                best_state=best_state,
+                history=history,
+                label_to_index=label_to_index,
+                args=args,
+                experiment_name=experiment_name,
+                description=description,
+                paths=paths,
+                train_features=train_features,
+                train_split=train_split,
+                val_split=val_split,
+                test_split=test_split,
+                repository=repository,
+                contrastive_checkpoint=contrastive_checkpoint,
+                epoch=epoch,
+            )
         if early_stopper.should_stop:
             print(f"[{experiment_name}] early stopping at epoch {epoch}")
             break
 
     if best_state is None:
         raise RuntimeError("Probe training completed without producing a best linear-head state.")
+    if not latest_checkpoint_path.exists():
+        save_latest_checkpoint(
+            latest_checkpoint_path,
+            head=head,
+            optimizer=optimizer,
+            early_stopper=early_stopper,
+            best_state=best_state,
+            history=history,
+            label_to_index=label_to_index,
+            args=args,
+            experiment_name=experiment_name,
+            description=description,
+            paths=paths,
+            train_features=train_features,
+            train_split=train_split,
+            val_split=val_split,
+            test_split=test_split,
+            repository=repository,
+            contrastive_checkpoint=contrastive_checkpoint,
+            epoch=int(history[-1]["epoch"]),
+        )
 
     head.load_state_dict(best_state)
 
@@ -265,6 +396,7 @@ def main() -> None:
                 "test_windows": len(test_split),
                 "seed": args.seed,
                 "contrastive_experiment_name": contrastive_checkpoint.get("metadata", {}).get("experiment_name"),
+                "save_every": args.save_every,
             },
             manifest_path=str(paths.windows_root / "manifest.json"),
             extra={"description": description},
@@ -299,6 +431,7 @@ def main() -> None:
         "history": history,
         "artifacts": {
             "checkpoint_path": str(checkpoint_path),
+            "latest_checkpoint_path": str(latest_checkpoint_path),
             "metrics_path": str(metrics_path),
             "confusion_path": str(confusion_path),
             "per_subject_accuracy_path": str(per_subject_path),
@@ -310,7 +443,16 @@ def main() -> None:
     plot_confusion_matrix(test_metrics["confusion_matrix"], index_to_label, experiment_name, confusion_path)
     write_subject_accuracy(per_subject_path, test_metrics["per_subject_accuracy"])
 
-    print(json.dumps({"metrics_path": str(metrics_path), "checkpoint_path": str(checkpoint_path)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "metrics_path": str(metrics_path),
+                "checkpoint_path": str(checkpoint_path),
+                "latest_checkpoint_path": str(latest_checkpoint_path),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

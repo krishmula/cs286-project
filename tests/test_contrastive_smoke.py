@@ -45,12 +45,14 @@ class ContrastiveSmokeTests(unittest.TestCase):
             checkpoint_files = sorted(output_dir.glob("*_checkpoint.pt"))
 
             self.assertEqual(len(metrics_files), 1)
-            self.assertEqual(len(checkpoint_files), 2)
+            self.assertEqual(len(checkpoint_files), 3)
 
             metrics = json.loads(metrics_files[0].read_text())
             self.assertIn("last_checkpoint_path", metrics["artifacts"])
+            self.assertIn("latest_checkpoint_path", metrics["artifacts"])
             checkpoint = load_checkpoint(Path(metrics["artifacts"]["checkpoint_path"]))
             last_checkpoint = load_checkpoint(Path(metrics["artifacts"]["last_checkpoint_path"]))
+            latest_checkpoint = load_checkpoint(Path(metrics["artifacts"]["latest_checkpoint_path"]))
 
             self.assertEqual(metrics["config"]["train_windows"], 64)
             self.assertEqual(metrics["config"]["val_windows"], 32)
@@ -65,6 +67,7 @@ class ContrastiveSmokeTests(unittest.TestCase):
             self.assertEqual(checkpoint["metadata"]["stage"], "contrastive")
             self.assertEqual(checkpoint["metadata"]["checkpoint_role"], "best")
             self.assertEqual(last_checkpoint["metadata"]["checkpoint_role"], "last")
+            self.assertEqual(latest_checkpoint["metadata"]["checkpoint_role"], "latest")
 
 
 if __name__ == "__main__":
