@@ -1,0 +1,330 @@
+\documentclass[12pt,a4paper]{cibb}
+
+% Fallback definition for missing \@ordinalM
+\makeatletter
+\providecommand{\@ordinalM}[2]{#1}
+\makeatother
+
+\usepackage{subfigure,graphicx}
+\usepackage{amsmath,amsfonts,latexsym,amssymb,euscript,xr}
+\usepackage{booktabs}
+\usepackage[nodayofweek]{datetime}
+\usepackage{hyperref}
+\usepackage{fmtcount}
+\usepackage[english]{datenumber}
+\usepackage[absolute]{textpos}
+
+\usepackage[table]{xcolor}
+\usepackage{color,colortbl,tabularx}
+
+\usepackage[english]{babel}
+\usepackage[protrusion=true,expansion=true]{microtype}
+\usepackage{amsmath,amsfonts,amsthm}
+\usepackage{pifont}
+
+\def\red{\color{red}}
+\def\black{\color{black}}
+\def\blue{\color{blue}}
+\def\magenta{\color{magenta}}
+
+\definecolor{LightBlue}{rgb}{0.88,0.9,0.9}
+
+\newcommand\blfootnote[1]{%
+  \begingroup
+  \renewcommand\thefootnote{}\footnote{#1}%
+  \addtocounter{footnote}{-1}%
+  \endgroup
+}
+
+\title{\Large $\ $\\ \bf Phone-Watch Contrastive Representation Learning for Subject-Generalized Wearable Activity Recognition}
+
+\author{\blue \large First Author$^1$, Second Author$^{2}$, and Third Author$^{*,3,4}$}
+\address{\blue \footnotesize $\ $\\$^1$ First author's department, institute,
+city, country. \\
+%
+$^2$ Second author's department, institute,
+city, country. \\
+%
+$^3$ Third author's primary affiliation department, institute,
+city, country.  \\
+%
+$^4$ Third author's secondary affiliation department, institute,
+city, country. \\
+%
+% \bigskip
+% ORCID codes: FA 0000-0000-0000-0000; SA 0000-0000-0000-0000; TA 0000-0000-0000-0000.
+% \bigskip
+% \newline
+% $^*$corresponding author: email@email.com
+% \bigskip
+% \newline
+% [The initial submission must be anonymous.
+% Do not edit the blue text sections of this short paper template before the initial submission.
+% Include information about author names and affiliations, conflict of interests, acknowledgments, data and software availability, and funding in black text only in the resubmission.]
+}
+
+\abstract{\small wearable sensing, human activity recognition, contrastive learning, multimodal fusion, subject generalization. \normalsize
+\\[17pt]
+{\bf Abstract (max 250 words).} This report studies activity recognition from synchronized phone and watch inertial streams using a subject-disjoint evaluation setup.
+The raw dataset provides per-subject files for phone and watch accelerometer and gyroscope recordings, with activity labels stored as contiguous letter-coded segments.
+We first build a segment-aware preprocessing pipeline that pairs the four streams by activity episode, rescales them onto a shared 20 Hz timeline, and writes normalized 3 s windows with 1 s stride.
+This produces 50,091 training windows, 12,744 validation windows, and 47,790 test windows, each represented as a $(12, 60)$ tensor.
+
+We then compare two learning strategies.
+The first is a supervised 1D CNN fusion baseline trained directly on the 12-channel windows.
+The second is a phone-watch contrastive model that learns paired embeddings with a symmetric InfoNCE loss and is evaluated through frozen linear probes.
+The canonical paired probe improves over the fused supervised baseline at both 100\% and 10\% label budgets, reaching 48.61\% vs.\ 44.81\% test accuracy with full labels and 47.95\% vs.\ 42.43\% with 10\% labels.
+The gain is larger under limited labels, which supports the claim that cross-view pretraining improves label efficiency.
+
+An important side result is strong device asymmetry.
+Watch-only models are much stronger than phone-only models, which suggests that wrist motion carries most of the discriminative signal in the current setup.
+This draft records the pipeline, the current quantitative findings, and the main open questions to address with later figures and visualization.
+}
+
+\begin{document}
+
+\renewcommand{\thefootnote}{}
+\footnotetext{\small{Article version: \datedate $\;$ h\currenttime  $\;$ CET}}
+
+\thispagestyle{myheadings}
+\pagestyle{myheadings}
+\markright{\tt Proceedings of CS 2026}
+
+\section{Introduction}
+\label{sec:SCIENTIFIC-BACKGROUND}
+
+Human activity recognition from wearables is a natural test bed for representation learning because labels are expensive while unlabeled sensor streams are plentiful.
+Our project focuses on a phone-watch setting where the two devices observe the same activity from different body locations.
+
+The working hypothesis is that synchronized phone and watch windows should provide complementary views of the same underlying motion pattern.
+If we align those views during pretraining, the learned representation should transfer better to unseen subjects and low-label regimes.
+
+This report therefore has two goals.
+The first is to document a reliable preprocessing and windowing pipeline for the four sensor streams.
+The second is to compare a supervised fusion baseline against cross-view contrastive pretraining followed by frozen linear probes.
+
+\section{Dataset Exploration}
+\label{sec:DATA}
+
+\subsection{Raw Dataset Structure}
+
+The raw data are organized into subject-disjoint \texttt{train/} and \texttt{test/} folders.
+Each split contains four sensor collections: \texttt{phone/accel}, \texttt{phone/gyro}, \texttt{watch/accel}, and \texttt{watch/gyro}.
+
+Every file stores one subject and one stream.
+Each row contains \texttt{subject\_id}, an activity label, a timestamp, and three sensor axes.
+The repository currently exposes labels as letter codes rather than human-readable activity names.
+
+The cached window manifest contains 18 activity codes: A, B, C, D, E, F, G, H, I, J, K, L, M, O, P, Q, R, and S.
+Because the semantic mapping is not yet stored in the repo, all per-class analysis in this draft uses those codes directly.
+
+\subsection{Split Summary}
+
+The raw paired-segment index contains 628 candidate activity episodes.
+Of those, 625 episodes have all four required streams and 3 are dropped because the phone accelerometer and phone gyroscope are missing.
+
+After preprocessing, we obtain the subject-disjoint split shown in Table~\ref{tab:split-summary}.
+Validation subjects are deterministically carved out of the raw training subjects, so the final workflow uses train, validation, and test subjects without leakage.
+
+\begin{table}[httb!] \small
+\centering
+    \begin{tabularx}{0.9\textwidth}{ l  c  c  X }
+        \toprule
+        \textbf{Split} & \textbf{\# Subjects} & \textbf{\# Windows} & \textbf{Notes} \\
+        \midrule
+        \rowcolor{LightBlue} Train & 16 & 50,091 & Used for supervised fitting and contrastive pretraining. \\
+        Val & 4 & 12,744 & Held out from the original training subjects for model selection. \\
+        \rowcolor{LightBlue} Test & 14 & 47,790 & Unseen subjects only; subject 1629 contributes a second activity occurrence for every class. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{\textbf{Window cache summary}.
+    The cached windows under \texttt{artifacts/windows/} are the source of truth for all current experiments.
+    \label{tab:split-summary}}
+\end{table}
+
+The split is close to class-balanced.
+Validation and test have 708 and 2,655 windows per class, respectively.
+Training is nearly balanced, with small deficits for B, F, J, and O because three raw activity episodes were removed before caching.
+
+\section{Annotation and Signal Exploration}
+
+The dataset is not best interpreted as one continuous, globally synchronized recording per subject.
+Instead, each file is an ordered concatenation of contiguous activity episodes, and the same label can appear multiple times for one subject.
+
+For that reason, we index episodes by \texttt{(subject\_id, activity\_label, occurrence\_index)} rather than by absolute time alone.
+This segment-aware view is the key design choice that keeps phone and watch alignment faithful to the annotation structure.
+
+The valid paired episodes are highly regular.
+Their common overlapping duration is approximately 179.71 s on average, with only a very small spread across subjects and classes.
+With a 3 s window and 1 s stride, each standard episode yields 177 windows.
+
+The native sampling rates differ noticeably across streams.
+Across valid segments, phone accelerometer averages 25.55 Hz, phone gyroscope 21.14 Hz, and both watch streams about 20.79 Hz, with some files much faster.
+This heterogeneity makes direct sample-by-sample fusion inappropriate without resampling.
+
+\section{Signal Preprocessing}
+
+The preprocessing pipeline begins by parsing each stream into contiguous runs of the same activity code.
+Each run becomes one candidate segment with start row, end row, duration, and native sampling-rate metadata.
+
+We then build four-stream episode pairs by matching segments with the same activity code and occurrence index.
+Only episodes that contain phone accelerometer, phone gyroscope, watch accelerometer, and watch gyroscope are kept.
+
+Within every valid episode, we compute the common overlapping duration across the four streams.
+All later operations use relative time within that overlap rather than raw timestamps from the original files.
+
+Each sensor axis is linearly interpolated onto a shared 20 Hz grid.
+The final fused tensor stacks the streams in a fixed order and produces a normalized $(12, 60)$ window.
+Channel-wise z-score statistics are estimated on the training windows and stored in \texttt{artifacts/windows/manifest.json}.
+
+We intentionally do not add handcrafted denoising, spectral transforms, or manual feature engineering at this stage.
+The current comparison isolates the value of alignment, normalization, and representation learning.
+
+\section{Windowing Strategies}
+
+Window generation is centered on a simple fixed-rate policy.
+Each window spans 3.0 s, uses a 1.0 s stride, and contains 60 samples after resampling.
+
+Window centers range from 1.5 s to 177.5 s inside a standard episode.
+Because windows are generated only after segment pairing, each window belongs to a single activity episode and does not cross label transitions.
+
+This segment-first design removes the need for majority-vote labeling or ad hoc transition filtering.
+In effect, the labels are inherited from the paired episode, and every cached window is already aligned across phone and watch.
+
+For label-efficiency experiments, the 10\% subset is selected deterministically within each \texttt{(subject, class)} bucket.
+That policy keeps at least one example per bucket when possible and ensures that the 10\% supervised baseline and the 10\% probe use comparable labeled subsets.
+
+\section{Feature Extraction}
+
+The current system does not rely on handcrafted statistical features.
+Instead, it learns features directly from the normalized time-domain windows.
+
+The supervised baseline uses a 1D CNN encoder with three temporal convolution blocks, batch normalization, ReLU activations, max pooling, and global average pooling.
+The encoder outputs a 256-dimensional feature vector and a linear classifier maps that feature to one of the 18 activity codes.
+
+The contrastive model uses separate phone and watch encoders with the same backbone.
+Each encoder consumes a $(6, 60)$ view and produces a 256-dimensional representation.
+Projection heads map those features from 256 to 128 to 64 dimensions before the contrastive loss is applied.
+
+For downstream evaluation, the paired probe concatenates the frozen phone and watch embeddings into a 512-dimensional feature vector.
+Single-device probes reuse only the phone or watch embedding, which helps isolate how much each device contributes.
+
+\section{Modeling and Results}
+
+\subsection{Supervised and Contrastive Setup}
+
+The supervised baseline is trained end to end with cross-entropy loss.
+The default optimizer is AdamW with learning rate $10^{-3}$, weight decay $10^{-4}$, batch size 256, dropout 0.2, and early stopping on validation macro F1.
+
+Contrastive pretraining uses the training windows without labels.
+Phone and watch views are augmented with Gaussian jitter, mild amplitude scaling, and short temporal masking before they are passed through the dual encoders.
+
+The pretraining objective is a symmetric InfoNCE loss with in-batch negatives and temperature $\tau = 0.2$:
+\begin{equation}
+\mathcal{L} =
+\frac{1}{2N}
+\sum_{i=1}^{N}
+\left[
+- \log \frac{\exp(\mathrm{sim}(z_i^p, z_i^w)/\tau)}{\sum_{j=1}^{N}\exp(\mathrm{sim}(z_i^p, z_j^w)/\tau)}
+- \log \frac{\exp(\mathrm{sim}(z_i^w, z_i^p)/\tau)}{\sum_{j=1}^{N}\exp(\mathrm{sim}(z_i^w, z_j^p)/\tau)}
+\right].
+\label{eq:infonce}
+\end{equation}
+
+After pretraining, the encoder weights are frozen.
+We then train linear heads for paired, phone-only, and watch-only probes at 10\% and 100\% label fractions.
+
+\subsection{Evaluation Protocol}
+
+All headline numbers are reported on the held-out test subjects.
+We track accuracy, macro F1, per-class F1, per-subject accuracy, confusion matrices, and per-subject CSV summaries.
+
+The most important comparison is the fused supervised baseline versus the paired frozen probe.
+That comparison isolates whether cross-view pretraining gives a useful representation before any end-to-end fine-tuning.
+
+\section{Results}
+\label{sec:RESULTS}
+
+\subsection{Quantitative Summary}
+
+Table~\ref{tab:main-results} summarizes the current results.
+The paired contrastive probe outperforms the canonical fusion baseline at both label budgets.
+At full labels, accuracy improves from 0.4481 to 0.4861 and macro F1 from 0.4395 to 0.4707.
+
+The low-label comparison is even stronger.
+With only 10\% of the labeled training windows, the fused supervised baseline reaches 0.4243 accuracy, while the paired probe reaches 0.4795.
+That is a gain of 5.52 accuracy points and 6.13 macro-F1 points.
+
+\begin{table}[httb!] \small
+\centering
+    \begin{tabularx}{0.96\textwidth}{ l  l  c  c  c }
+        \toprule
+        \textbf{Method} & \textbf{Input} & \textbf{Labels} & \textbf{Acc.} & \textbf{Macro F1} \\
+        \midrule
+        \rowcolor{LightBlue} Supervised fusion baseline & phone + watch raw windows & 100\% & 0.4481 & 0.4395 \\
+        Supervised fusion baseline & phone + watch raw windows & 10\% & 0.4243 & 0.4045 \\
+        \rowcolor{LightBlue} Contrastive paired probe & frozen phone + watch embeddings & 100\% & 0.4861 & 0.4707 \\
+        Contrastive paired probe & frozen phone + watch embeddings & 10\% & 0.4795 & 0.4658 \\
+        \rowcolor{LightBlue} Supervised watch baseline & watch raw windows only & 100\% & 0.6355 & 0.6391 \\
+        Contrastive watch probe & frozen watch embeddings only & 100\% & 0.5831 & 0.5777 \\
+        \rowcolor{LightBlue} Supervised phone baseline & phone raw windows only & 100\% & 0.1758 & 0.1712 \\
+        Contrastive phone probe & frozen phone embeddings only & 100\% & 0.1692 & 0.1540 \\
+        \bottomrule
+    \end{tabularx}
+    \caption{\textbf{Current headline results}.
+    The paired probe beats the canonical fusion baseline under both full-label and 10\%-label training.
+    \label{tab:main-results}}
+\end{table}
+
+\subsection{Interpretation}
+
+The strongest single observation is device asymmetry.
+The watch-only supervised baseline reaches 0.6355 accuracy, far above both the fusion baseline and any phone-only model.
+This suggests that wrist motion is currently the cleanest source of discriminative information.
+
+The second observation is that paired contrastive pretraining is useful even though the downstream head is linear and the encoders are frozen.
+The minimum per-subject test accuracy rises from 0.1946 in the full fusion baseline to 0.2307 in the full paired probe, and from 0.1111 to 0.2341 in the 10\% comparison.
+
+Per-class behavior is also consistent across runs.
+Classes B, O, and P are among the easiest, while F, I, J, K, and L remain difficult.
+Because the class semantics are not yet included in the repository, we defer behavior-level interpretation until the label mapping is added.
+
+An additional exploratory run with a low-learning-rate paired setup reaches about 0.501 test accuracy and 0.486 macro F1.
+We treat that result as promising headroom rather than the main claim, because the standardized comparison table is still based on the canonical artifact set.
+
+\subsection{What Still Needs Figures}
+
+The repo already saves confusion matrices, per-subject accuracy CSV files, and walkthrough plots under \texttt{artifacts/}.
+Those should become the final figures for this report once we decide on the exact visual style.
+
+The highest-priority additions are a split-summary figure, one example of segment alignment and resampling, confusion matrices for the fusion baseline and paired probe, and a per-subject accuracy comparison plot.
+Embedding visualizations can be added later once we expand the representation-analysis story.
+
+\section{Conclusion}
+\label{sec:CONCLUSIONS}
+
+This project now has a complete end-to-end pipeline from raw phone and watch inertial files to subject-disjoint quantitative evaluation.
+The main engineering contribution is a segment-aware alignment and resampling pipeline that converts heterogeneous raw streams into stable multimodal windows.
+
+The main empirical result is that cross-view contrastive pretraining improves over the canonical fused supervised baseline, especially when labels are limited.
+At the same time, the experiments reveal a strong watch-over-phone advantage that should shape the next round of analysis.
+
+The next steps are clear.
+We should add the human-readable label mapping, integrate the saved plots into the paper, and study why watch-only models outperform fusion in the current implementation.
+We should also test whether stronger contrastive checkpoints and light fine-tuning can close more of the gap to the watch-only baseline.
+
+\section*{Availability of data and software code (optional and strongly suggested)}
+\label{sec:AVAILABILITY}
+
+The raw inertial files used in this draft are stored in \texttt{data/}.
+Derived window caches are stored in \texttt{artifacts/windows/}, supervised outputs in \texttt{artifacts/baseline/}, contrastive outputs in \texttt{artifacts/contrastive/}, and probe outputs in \texttt{artifacts/probes/}.
+
+Reusable training and evaluation code is implemented under \texttt{src/}, and the current execution workflow is documented in \texttt{docs/phase2\_runbook.md}.
+Before public release, we should confirm whether the raw dataset can be redistributed directly or only referenced.
+
+\footnotesize
+\bibliographystyle{unsrt}
+\bibliography{bibliography}
+\normalsize
+
+\end{document}
