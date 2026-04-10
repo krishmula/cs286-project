@@ -4,25 +4,25 @@ This runbook is the command path from the cached windows in `artifacts/windows` 
 
 ## 1. Canonical supervised baselines
 
-Run the full-label fused baseline:
+Use the existing full-label watch baseline if you already produced it from `notebooks/05_standalone_colab_channel_baselines.ipynb`. If you want a clean repo-native artifact instead, run:
 
 ```bash
 python -m src.train_supervised \
   --project-root /Users/krishna/dev/cs286-project \
   --output-dir /Users/krishna/dev/cs286-project/artifacts/baseline \
-  --experiment-name fusion_full \
-  --channel-mode fusion \
+  --experiment-name watch_full \
+  --channel-mode watch \
   --label-fraction 1.0
 ```
 
-Run the matched 10% fused baseline:
+Run the matched 10% watch baseline:
 
 ```bash
 python -m src.train_supervised \
   --project-root /Users/krishna/dev/cs286-project \
   --output-dir /Users/krishna/dev/cs286-project/artifacts/baseline \
-  --experiment-name fusion_10pct \
-  --channel-mode fusion \
+  --experiment-name watch_10pct \
+  --channel-mode watch \
   --label-fraction 0.1
 ```
 
@@ -141,6 +141,12 @@ python -m src.reporting.compare_runs \
   --output-dir /Users/krishna/dev/cs286-project/artifacts/reports
 ```
 
+If your existing full-label watch artifact still uses the older notebook experiment name `standalone_supervised_watch`, add:
+
+```bash
+  --experiment-alias standalone_supervised_watch=watch_full
+```
+
 Expected outputs:
 
 - `comparison_summary.json`
@@ -148,8 +154,8 @@ Expected outputs:
 
 The summary report requires these experiment names to exist:
 
-- `fusion_full`
-- `fusion_10pct`
+- `watch_full`
+- `watch_10pct`
 - `contrastive_pair_probe_10pct`
 - `contrastive_pair_probe_100pct`
 - `contrastive_phone_probe_10pct`

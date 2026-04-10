@@ -208,12 +208,13 @@ def default_experiment_name(channel_mode: str, label_fraction: float) -> str:
 
 
 def description_for_run(channel_mode: str, label_fraction: float) -> str:
-    if channel_mode == "fusion" and label_fraction >= 1.0:
-        return "Canonical fused supervised baseline using all labeled train windows."
+    if channel_mode == "watch" and label_fraction >= 1.0:
+        return "Primary watch-only supervised baseline using all labeled train windows."
+    if channel_mode == "watch":
+        return f"Watch-only supervised baseline trained on a {label_fraction:.0%} subject-balanced labeled subset."
     if channel_mode == "fusion":
         return f"Fusion supervised baseline trained on a {label_fraction:.0%} subject-balanced labeled subset."
-    view_label = "Phone" if channel_mode == "phone" else "Watch"
-    return f"{view_label}-only supervised baseline using all labeled train windows."
+    return "Phone-only supervised baseline using all labeled train windows."
 
 
 def trim_split(split_data: CachedSplitData, max_samples: int | None) -> CachedSplitData:

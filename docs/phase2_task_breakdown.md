@@ -137,11 +137,11 @@ Task 1: Runtime + config scaffolding
 
 ## Task 4: Port the canonical fused supervised runner
 
-**Description:** Rebuild the current fused supervised baseline as a reusable `src/` entrypoint that depends on the new loader and shared utilities instead of the ad hoc baseline script. This becomes the canonical comparator for all later SSL results.
+**Description:** Rebuild the current supervised baseline as a reusable `src/` entrypoint that depends on the new loader and shared utilities instead of the ad hoc baseline script. The watch-only run becomes the primary comparator for all later SSL results, while phone-only and fusion remain comparison ablations.
 
 **Acceptance criteria:**
 
-- [ ] A supervised training entrypoint trains the fused `12 x 60` baseline using the new package modules.
+- [ ] A supervised training entrypoint trains the watch-only baseline using the new package modules.
 - [ ] The entrypoint supports at least `100%` and `10%` labeled training fractions using the same deterministic subset sampler that probes will use.
 - [ ] The run writes checkpoint, metrics JSON, confusion matrix, and per-subject accuracy outputs to a standardized artifact location.
 
@@ -149,7 +149,7 @@ Task 1: Runtime + config scaffolding
 
 - [ ] Smoke run succeeds for one epoch on a tiny subset.
 - [ ] Full-data metric output matches the existing baseline format closely enough to compare results.
-- [ ] Manual check: the canonical run is clearly documented as the baseline source of truth for phase 2.
+- [ ] Manual check: the watch-only run is clearly documented as the baseline source of truth for phase 2.
 
 **Dependencies:** Task 3
 
@@ -264,7 +264,7 @@ Task 1: Runtime + config scaffolding
 **Verification:**
 
 - [ ] Comparison script runs successfully on smoke or partial outputs with explicit handling for missing artifacts.
-- [ ] Summary rows include `fusion_full`, `fusion_10pct`, and all agreed probe variants.
+- [ ] Summary rows include `watch_full`, `watch_10pct`, and all agreed probe variants.
 - [ ] Manual check: the output is suitable for direct use in notebooks or the final report.
 
 **Dependencies:** Tasks 4 and 7

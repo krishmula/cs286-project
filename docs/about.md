@@ -7,7 +7,7 @@ The core idea is to treat the phone and watch as two synchronized views of the s
 
 The project is designed with two layers:
 
-- A **supervised multimodal fusion baseline** using all four sensor streams to perform subject-generalized activity recognition.
+- A **supervised baseline layer** that compares watch-only, phone-only, and multimodal fusion models for subject-generalized activity recognition, with watch-only currently serving as the main supervised benchmark.
 - An **ambitious contrastive extension** where synchronized phone–watch windows are used as positive pairs in an InfoNCE-style objective, enabling:
   - Device-invariant embeddings (phone vs watch).
   - Improved generalization to unseen subjects.

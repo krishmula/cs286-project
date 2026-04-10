@@ -1,0 +1,6 @@
+{
+  "confusion_matrix_supervised_watch": "/Users/krishna/dev/cs286-project/figures/confusion_matrix_supervised_watch.png",
+  "confusion_matrix_contrastive_watch_probe": "/Users/krishna/dev/cs286-project/figures/confusion_matrix_contrastive_watch_probe.png",
+  "per_class_f1_watch_vs_ssl": "/Users/krishna/dev/cs286-project/figures/per_class_f1_watch_vs_ssl.png",
+  "roc_auc_watch_vs_ssl": "/Users/krishna/dev/cs286-project/figures/roc_auc_watch_vs_ssl.png"
+}

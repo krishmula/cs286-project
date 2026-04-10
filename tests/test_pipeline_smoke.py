@@ -30,9 +30,9 @@ class PipelineSmokeTests(unittest.TestCase):
                     "--output-dir",
                     str(baseline_dir),
                     "--experiment-name",
-                    "fusion_full",
+                    "watch_full",
                     "--channel-mode",
-                    "fusion",
+                    "watch",
                     "--label-fraction",
                     "1.0",
                     "--epochs",
@@ -66,9 +66,9 @@ class PipelineSmokeTests(unittest.TestCase):
                     "--output-dir",
                     str(baseline_dir),
                     "--experiment-name",
-                    "fusion_10pct",
+                    "watch_10pct",
                     "--channel-mode",
-                    "fusion",
+                    "watch",
                     "--label-fraction",
                     "0.1",
                     "--epochs",
@@ -171,8 +171,8 @@ class PipelineSmokeTests(unittest.TestCase):
                     "--output-dir",
                     str(reports_dir),
                     "--expected-experiments",
-                    "fusion_full",
-                    "fusion_10pct",
+                    "watch_full",
+                    "watch_10pct",
                     "contrastive_pair_probe_10pct",
                 ],
                 cwd=PROJECT_ROOT,
@@ -188,7 +188,7 @@ class PipelineSmokeTests(unittest.TestCase):
             summary = json.loads(summary_json.read_text())
             self.assertEqual(
                 [row["experiment_name"] for row in summary["results"]],
-                ["fusion_full", "fusion_10pct", "contrastive_pair_probe_10pct"],
+                ["watch_full", "watch_10pct", "contrastive_pair_probe_10pct"],
             )
 
 

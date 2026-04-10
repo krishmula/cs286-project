@@ -3,12 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 
 CORE_EXPERIMENTS = [
-    "fusion_full",
-    "fusion_10pct",
+    "watch_full",
+    "watch_10pct",
     "contrastive_pair_probe_10pct",
     "contrastive_pair_probe_100pct",
     "contrastive_phone_probe_10pct",
@@ -24,6 +24,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-dir", type=Path, required=True, help="Directory containing probe *_metrics.json files.")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory to write summary outputs.")
     parser.add_argument(
+        "--experiment-alias",
+        action="append",
+        default=[],
+        metavar="SOURCE=TARGET",
+        help="Rename a metrics payload experiment name before summarizing. Useful for reusing older artifacts.",
+    )
+    parser.add_argument(
         "--expected-experiments",
         nargs="+",
         default=CORE_EXPERIMENTS,
@@ -32,25 +39,42 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_metrics_payloads(*roots: Path) -> dict[str, dict]:
+def parse_experiment_aliases(alias_args: Iterable[str]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for raw_alias in alias_args:
+        source, separator, target = raw_alias.partition("=")
+        source = source.strip()
+        target = target.strip()
+        if separator != "=" or not source or not target:
+            raise ValueError(f"Invalid experiment alias {raw_alias!r}. Expected SOURCE=TARGET.")
+        aliases[source] = target
+    return aliases
+
+
+def collect_metrics_payloads(*roots: Path, experiment_aliases: Mapping[str, str] | None = None) -> dict[str, dict]:
     payloads_by_experiment: dict[str, dict] = {}
+    experiment_aliases = experiment_aliases or {}
     for root in roots:
         root = Path(root)
         if not root.exists():
             raise FileNotFoundError(f"Metrics root does not exist: {root}")
         for metrics_path in sorted(root.rglob("*_metrics.json")):
             payload = json.loads(metrics_path.read_text())
-            experiment_name = payload.get("experiment_name")
+            original_experiment_name = payload.get("experiment_name")
+            experiment_name = experiment_aliases.get(original_experiment_name, original_experiment_name)
             if not experiment_name:
                 continue
             if experiment_name in payloads_by_experiment:
-                existing = payloads_by_experiment[experiment_name]["metrics_path"]
-                raise ValueError(
-                    f"Duplicate metrics for experiment {experiment_name!r}: {existing} and {metrics_path}"
-                )
+                existing_entry = payloads_by_experiment[experiment_name]
+                existing_path = Path(existing_entry["metrics_path"])
+                existing_key = (existing_path.stat().st_mtime_ns, str(existing_path))
+                candidate_key = (metrics_path.stat().st_mtime_ns, str(metrics_path))
+                if candidate_key <= existing_key:
+                    continue
             payloads_by_experiment[experiment_name] = {
                 "payload": payload,
                 "metrics_path": str(metrics_path),
+                "original_experiment_name": original_experiment_name,
             }
     return payloads_by_experiment
 
@@ -120,11 +144,12 @@ def write_comparison_outputs(
     probe_dir: Path,
     output_dir: Path,
     expected_experiments: Iterable[str],
+    experiment_aliases: Mapping[str, str] | None = None,
 ) -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    payloads = collect_metrics_payloads(baseline_dir, probe_dir)
+    payloads = collect_metrics_payloads(baseline_dir, probe_dir, experiment_aliases=experiment_aliases)
     rows = summarize_runs(payloads, expected_experiments)
 
     json_path = output_dir / "comparison_summary.json"
@@ -143,6 +168,7 @@ def main() -> None:
         probe_dir=args.probe_dir,
         output_dir=args.output_dir,
         expected_experiments=args.expected_experiments,
+        experiment_aliases=parse_experiment_aliases(args.experiment_alias),
     )
     print(json.dumps({key: str(path) for key, path in outputs.items()}, indent=2))
 
