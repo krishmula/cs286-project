@@ -27,6 +27,90 @@ def metric_token(value: float) -> str:
     return f"{value:.4f}".replace(".", "p")
 
 
+def load_pretrained_encoder(
+    model: nn.Module,
+    checkpoint_path: Path,
+    model_type: str,
+    device: torch.device,
+) -> nn.Module:
+    """Load pretrained encoder weights into model."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    encoder_state = checkpoint.get("encoder_state_dict")
+    
+    if encoder_state is None:
+        raise ValueError(f"Checkpoint {checkpoint_path} missing 'encoder_state_dict'")
+    
+    model.load_state_dict(encoder_state, strict=False)
+    
+    loaded_keys = list(encoder_state.keys())
+    print(
+        f"Loaded {len(loaded_keys)} encoder parameters from {checkpoint_path} "
+        f"(source: {checkpoint.get('source_dataset', 'unknown')}, "
+        f"classes={checkpoint.get('source_classes', '?')}, "
+        f"channels={checkpoint.get('source_channels', '?')})"
+    )
+    return model
+
+
+def apply_freeze_strategy(model: nn.Module, strategy: str, model_type: str) -> str:
+    """Apply layer freezing strategy and return description."""
+    if strategy == "none":
+        for p in model.parameters():
+            p.requires_grad = True
+        return "No freezing — all parameters trainable"
+    
+    elif strategy == "all":
+        if model_type == "cnn":
+            for p in model.encoder.parameters():
+                p.requires_grad = False
+        elif model_type == "lstm":
+            for p in model.lstm.parameters():
+                p.requires_grad = False
+        return "Frozen entire encoder, training classifier only"
+    
+    elif strategy == "first_two":
+        if model_type == "cnn":
+            for i, layer in enumerate(model.encoder.features):
+                freeze = i < 8
+                for p in layer.parameters():
+                    p.requires_grad = not freeze
+            return "Frozen first two conv blocks, training conv3 + classifier"
+        elif model_type == "lstm":
+            for name, p in model.lstm.named_parameters():
+                p.requires_grad = "l1" in name
+            return "Frozen LSTM layer 1, training layer 2 + classifier"
+    
+    elif strategy == "progressive":
+        if model_type == "cnn":
+            for p in model.encoder.parameters():
+                p.requires_grad = False
+        elif model_type == "lstm":
+            for p in model.lstm.parameters():
+                p.requires_grad = False
+        return "Progressive: encoder frozen, will unfreeze at specified epoch"
+    
+    else:
+        raise ValueError(f"Unknown freeze strategy: {strategy}")
+
+
+def unfreeze_all_encoder(model: nn.Module, model_type: str) -> None:
+    """Unfreeze all encoder layers."""
+    if model_type == "cnn":
+        for p in model.encoder.parameters():
+            p.requires_grad = True
+    elif model_type == "lstm":
+        for p in model.lstm.parameters():
+            p.requires_grad = True
+    print(f"Unfrozen all {model_type.upper()} encoder layers")
+
+
+def count_trainable_params(model: nn.Module) -> tuple[int, int]:
+    """Return (trainable_count, total_count)."""
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    return trainable, total
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=None, help="Project root containing artifacts/windows.")
@@ -75,6 +159,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-train-windows", type=int, default=None)
     parser.add_argument("--max-val-windows", type=int, default=None)
     parser.add_argument("--max-test-windows", type=int, default=None)
+    parser.add_argument(
+        "--model-type",
+        choices=("cnn", "lstm"),
+        default="cnn",
+        help="Model architecture type.",
+    )
+    # Transfer learning arguments
+    parser.add_argument(
+        "--pretrained-encoder-path",
+        type=Path,
+        default=None,
+        help="Path to pretrained encoder checkpoint (e.g., from UCI HAR pretraining).",
+    )
+    parser.add_argument(
+        "--freeze-strategy",
+        choices=("none", "all", "first_two", "progressive"),
+        default="none",
+        help="Layer freezing strategy for transfer learning. 'none'=train all, 'all'=freeze encoder, "
+             "'first_two'=freeze early layers, 'progressive'=freeze then unfreeze at --unfreeze-at-epoch.",
+    )
+    parser.add_argument(
+        "--unfreeze-at-epoch",
+        type=int,
+        default=10,
+        help="Epoch at which to unfreeze encoder for progressive strategy.",
+    )
+    parser.add_argument(
+        "--fine-tune-lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate for fine-tuning (used when --pretrained-encoder-path is set).",
+    )
     return parser.parse_args()
 
 
@@ -199,12 +315,25 @@ def write_subject_accuracy(path: Path, per_subject_accuracy: dict[int, float]) -
             writer.writerow({"subject_id": subject_id, "accuracy": accuracy})
 
 
-def default_experiment_name(channel_mode: str, label_fraction: float) -> str:
+def default_experiment_name(
+    channel_mode: str,
+    label_fraction: float,
+    model_type: str = "cnn",
+    freeze_strategy: str = "none",
+    is_transfer: bool = False,
+) -> str:
     if label_fraction >= 1.0:
         fraction_token = "full"
     else:
         fraction_token = f"{int(round(label_fraction * 100)):02d}pct"
-    return f"{channel_mode}_{fraction_token}"
+    suffix = f"_{model_type}" if model_type != "cnn" else ""
+    
+    if is_transfer and freeze_strategy != "none":
+        transfer_suffix = f"_transfer_{freeze_strategy}"
+    else:
+        transfer_suffix = ""
+    
+    return f"{channel_mode}_{fraction_token}{suffix}{transfer_suffix}"
 
 
 def description_for_run(channel_mode: str, label_fraction: float) -> str:
@@ -277,6 +406,7 @@ def save_latest_checkpoint(
 
 def main() -> None:
     args = parse_args()
+    is_transfer = args.pretrained_encoder_path is not None
     paths = resolve_project_paths(args.project_root)
     output_dir = (args.output_dir or paths.baseline_root).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -286,7 +416,13 @@ def main() -> None:
     label_to_index = manifest["label_to_index"]
     index_to_label = {index: label for label, index in label_to_index.items()}
 
-    experiment_name = args.experiment_name or default_experiment_name(args.channel_mode, args.label_fraction)
+    experiment_name = args.experiment_name or default_experiment_name(
+        args.channel_mode,
+        args.label_fraction,
+        args.model_type,
+        args.freeze_strategy,
+        is_transfer,
+    )
     description = args.description or description_for_run(args.channel_mode, args.label_fraction)
     latest_checkpoint_path = output_dir / "latest_checkpoint.pt"
 
@@ -313,8 +449,36 @@ def main() -> None:
         num_classes=len(label_to_index),
         dropout=args.dropout,
     ).to(device)
+
+    # Transfer learning: load pretrained encoder if specified
+    if is_transfer:
+        model = load_pretrained_encoder(
+            model=model,
+            checkpoint_path=args.pretrained_encoder_path,
+            model_type=args.model_type,
+            device=device,
+        )
+        freeze_desc = apply_freeze_strategy(model, args.freeze_strategy, args.model_type)
+        trainable, total = count_trainable_params(model)
+        print(
+            f"[{experiment_name}] Transfer learning enabled. {freeze_desc}"
+        )
+        print(
+            f"[{experiment_name}] Trainable parameters: {trainable:,} / {total:,} "
+            f"({100 * trainable / total:.1f}%)"
+        )
+
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # Use fine-tune LR for transfer learning, standard LR for from-scratch
+    current_lr = args.fine_tune_lr if is_transfer else args.lr
+
+    # Only pass trainable parameters to optimizer
+    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    optimizer = torch.optim.AdamW(trainable_params, lr=current_lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=3
+    )
 
     train_loader = to_loader(train_arrays, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = to_loader(val_arrays, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
@@ -336,6 +500,22 @@ def main() -> None:
         print(f"[{experiment_name}] resumed from {args.resume_from} at epoch {start_epoch}")
 
     for epoch in range(start_epoch, args.epochs + 1):
+        # Progressive unfreeze check
+        if (
+            is_transfer
+            and args.freeze_strategy == "progressive"
+            and epoch == args.unfreeze_at_epoch
+        ):
+            unfreeze_all_encoder(model, args.model_type)
+            # Re-create optimizer to include newly unfrozen parameters
+            trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+            new_lr = args.fine_tune_lr * 0.1  # Even lower LR after unfreeze
+            optimizer = torch.optim.AdamW(trainable_params, lr=new_lr, weight_decay=args.weight_decay)
+            print(
+                f"[{experiment_name}] Progressive unfreeze at epoch {epoch}. "
+                f"New LR: {new_lr:.1e}"
+            )
+
         train_loss = train_one_epoch(
             model=model,
             loader=train_loader,
@@ -466,6 +646,13 @@ def main() -> None:
                 "val_windows": len(val_split),
                 "test_windows": len(test_split),
                 "seed": args.seed,
+                "transfer_learning": {
+                    "enabled": is_transfer,
+                    "pretrained_encoder_path": str(args.pretrained_encoder_path) if is_transfer else None,
+                    "freeze_strategy": args.freeze_strategy if is_transfer else None,
+                    "unfreeze_at_epoch": args.unfreeze_at_epoch if is_transfer else None,
+                    "fine_tune_lr": args.fine_tune_lr if is_transfer else None,
+                },
             },
             manifest_path=str(paths.windows_root / "manifest.json"),
             extra={"description": description},
