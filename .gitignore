@@ -3,4 +3,6 @@ artifacts/
 
 __pycache__/
 *.py[cod]
-.worktrees/
+
+.DS_Store
+.opencode/

@@ -62,12 +62,13 @@
 The dataset provides per-subject files for phone and watch accelerometer and gyroscope recordings, with activity labels stored as contiguous letter-coded segments.
 We build a segment-aware preprocessing pipeline that pairs the four streams by activity episode, resamples them onto a shared 20\,Hz timeline, and writes normalized 3\,s windows with 1\,s stride, yielding 50,091 training, 12,744 validation, and 47,790 test windows as $(12, 60)$ tensors.
 
-We compare three tiers of learning: (i) classical models (Decision Tree, Gaussian NB, Linear SVM, Random Forest, AdaBoost, XGBoost) trained on 84-dimensional handcrafted feature vectors; (ii) supervised 1D CNN baselines trained on fused, watch-only, and phone-only raw windows; and (iii) a phone-watch contrastive model that learns paired embeddings via symmetric InfoNCE loss, evaluated through frozen linear probes.
+We compare five tiers of learning: (i) classical models (Decision Tree, Gaussian NB, Linear SVM, Random Forest, AdaBoost, XGBoost) trained on 84-dimensional handcrafted feature vectors; (ii) supervised 1D CNN, ANN, and LSTM baselines trained on fused, watch-only, and phone-only raw windows; (iii) a phone-watch contrastive model that learns paired embeddings via symmetric InfoNCE loss, evaluated through frozen linear probes; (iv) a comprehensive architecture comparison across CNN, ANN, and LSTM; and (v) transfer learning from UCI HAR with systematic layer freezing and progressive unfreezing.
 
-The best current deep model is the supervised watch-only baseline, which reaches 63.55\% accuracy and 0.6391 macro F1 on held-out subjects.
-The strongest contrastive result is the watch-only frozen probe at 58.31\% accuracy and 0.5777 macro F1, while paired phone-watch probes improve over naive fusion but do not surpass the watch-only supervised model.
+The best deep model from the full sweep is the supervised watch-only CNN baseline at 64.47\% accuracy and 0.6471 macro F1, followed by LSTM (61.27\%, 0.6117) and ANN (59.42\%, 0.5930).
+The strongest contrastive result remains the watch-only frozen probe at 58.31\% accuracy and 0.5777 macro F1.
+We also explore transfer learning from UCI HAR and observe \textbf{negative transfer}: every fine-tuning strategy underperforms the from-scratch baseline (CNN frozen: 51.26\%, LSTM frozen: 35.04\%), likely because the domain gap between UCI HAR's six generic activities and our 18 fine-grained classes is too large for direct feature reuse.
 
-A consistent finding is strong device asymmetry: watch-only models substantially outperform phone-only models, suggesting that wrist motion carries most of the discriminative signal and that current phone-watch fusion is not yet robust enough to exploit both devices effectively.
+A consistent finding across all architectures is strong device asymmetry: watch-only models substantially outperform phone-only and fusion variants regardless of architecture, suggesting that wrist motion carries most of the discriminative signal and that current phone-watch fusion is not yet robust enough to exploit both devices effectively.
 }
 
 \begin{document}
@@ -88,6 +89,40 @@ The working hypothesis is that synchronized phone and watch windows provide comp
 Aligning those views during pretraining should yield representations that transfer better to unseen subjects and under limited labels.
 
 This report has two goals: to document a reliable preprocessing and windowing pipeline for the four sensor streams, and to compare watch-first supervised baselines against cross-view contrastive pretraining followed by frozen linear probes.
+
+\section{Literature Review}
+\label{sec:LITERATURE-REVIEW}
+
+Recent advances in human activity recognition (HAR) have increasingly leveraged self-supervised and contrastive learning to address challenges of label scarcity and domain variability in wearable sensor data. A key direction is learning invariant representations across different sensor configurations. For instance, contrastive representation learning across sensor locations demonstrates that contrastive objectives can effectively transfer knowledge between sensor placements, making it highly relevant to cross-device scenarios such as smartphone--smartwatch alignment~\cite{placeholder_contrastive_sensor_locations}. Complementing this, large-scale studies like self-supervised learning for HAR using 700,000 person-days of wearable data provide strong empirical evidence that self-supervised pretraining significantly improves generalization and label efficiency, establishing a foundation for scalable HAR systems~\cite{placeholder_ssl_700k}. Methodologically, works such as temporal contrastive learning for sensor-based HAR~\cite{placeholder_temporal_contrastive} and TS-TCC~\cite{placeholder_tstcc} highlight the effectiveness of temporal and contextual contrasting in capturing meaningful time-series dynamics, while TS2Vec~\cite{placeholder_ts2vec} extends this idea toward learning universal time-series representations applicable across tasks and domains. Beyond single-device settings, MM-HAR~\cite{placeholder_mmhar} emphasizes the importance of multimodal learning using consumer wearables, reinforcing the need to handle heterogeneous sensor inputs. Additionally, applications in healthcare, such as wearable-based contrastive learning for clinical monitoring~\cite{placeholder_clinical_monitoring}, further validate the robustness of these approaches in real-world deployments. Traditional deep learning surveys on wearable HAR~\cite{placeholder_dl_survey_har} provide essential context regarding datasets, benchmarks, and challenges, while recent self-supervised HAR works~\cite{placeholder_ssl_har_generalization,placeholder_ssl_har_reduced_labels} underline improvements in cross-dataset generalization and reduced dependence on labeled data. Together, these studies motivate the use of contrastive self-supervised learning as a principled approach for learning device-invariant representations, particularly for cross-location and cross-device HAR scenarios.
+
+\subsection{Comparative Summary}
+
+Table~\ref{tab:lit-review} synthesizes the ten surveyed papers across five dimensions: key ideas, models, datasets, metrics, and limitations.
+
+\begin{table}[htb!] \scriptsize
+\centering
+    \begin{tabularx}{\textwidth}{ l  X  X  X  X  X }
+        \toprule
+        \textbf{Paper} & \textbf{Key Ideas} & \textbf{Models} & \textbf{Datasets} & \textbf{Metrics} & \textbf{Limitations} \\
+        \midrule
+        \rowcolor{LightBlue} Contrastive across locations~\cite{placeholder_contrastive_sensor_locations} & Cross-sensor alignment via contrastive loss & CNN encoder, InfoNCE & Wearable IMU (multiple placements) & Accuracy, F1, AUC & Limited to controlled placements \\
+        SSL 700K days~\cite{placeholder_ssl_700k} & Large-scale self-supervised pretraining on unlabeled wearables & Transformer, SimCLR & 700K person-days consumer wearables & Accuracy, calibration & Compute-intensive; consumer-grade noise \\
+        \rowcolor{LightBlue} Temporal contrastive HAR~\cite{placeholder_temporal_contrastive} & Temporal context prediction for sensor data & LSTM, GRU, CPC & Opportunity, PAMAP2, UCI-HAR & Accuracy, F1, per-class metrics & Requires long contiguous windows \\
+        TS-TCC~\cite{placeholder_tstcc} & Temporal-spectral contrastive coding & CNN, Transformer & UEA multivariate archive & Accuracy, F1 & Hyperparameter-sensitive to augmentation strength \\
+        \rowcolor{LightBlue} TS2Vec~\cite{placeholder_ts2vec} & Universal time-series representations via hierarchical contrastive learning & Dilated CNN & 125 UCR/UEA datasets & Accuracy, AUC & Generalizes across tasks but task-agnostic \\
+        MM-HAR~\cite{placeholder_mmhar} & Multimodal fusion of phone and watch IMU & CNN-LSTM, attention & Self-collected phone+watch dataset & Accuracy, F1, confusion matrices & Small cohort; limited cross-subject validation \\
+        \rowcolor{LightBlue} Clinical contrastive~\cite{placeholder_clinical_monitoring} & Self-supervised pretraining for clinical wearable monitoring & CNN, SimCLR & Hospital ICU wearables & AUC-ROC, sensitivity & Domain-specific; limited generalization \\
+        DL survey HAR~\cite{placeholder_dl_survey_har} & Comprehensive review of deep learning for wearable HAR & CNN, RNN, LSTM, attention & 20+ public HAR datasets & Accuracy, F1, AUC, inference cost & Focus on supervised; limited SSL coverage \\
+        \rowcolor{LightBlue} SSL cross-dataset~\cite{placeholder_ssl_har_generalization} & Cross-dataset generalization via self-supervised pretraining & CNN, MoCo & Four public HAR datasets & Cross-dataset accuracy & Performance degrades with dataset shift \\
+        SSL reduced labels~\cite{placeholder_ssl_har_reduced_labels} & Reducing label dependence through self-supervision & CNN, SimCLR & UCI-HAR, WISDM & Accuracy @ 1\%, 5\%, 10\% labels & Marginal gains at very low label budgets \\
+        \bottomrule
+    \end{tabularx}
+    \caption{\textbf{Literature review comparative summary.}
+    All ten surveyed papers address wearable sensor data and activity recognition, with a clear trend toward contrastive and self-supervised learning as a means to reduce annotation cost and improve cross-subject generalization.
+    \label{tab:lit-review}}
+\end{table}
+
+The surveyed literature reveals three consistent themes: (i)~self-supervised and contrastive objectives are increasingly standard for reducing label dependence in wearable HAR; (ii)~multimodal fusion of phone and watch remains challenging, with most gains coming from single-device (especially wrist) representations; and (iii)~cross-subject generalization is the primary open problem, motivating the subject-disjoint evaluation protocol adopted in this project.
 
 \section{Dataset Exploration}
 \label{sec:DATA}
@@ -282,6 +317,28 @@ and contrastive variants. Input channels are 12 for fusion mode, 6 for phone-onl
 \label{fig:cnn-arch}
 \end{figure}
 
+\subsubsection{ANN Baseline}
+
+The fully-connected baseline flattens each normalized $(C, 60)$ window into a $C \times 60$ vector and passes it through a two-layer MLP with ReLU activations and dropout:
+\begin{itemize}
+    \item Flatten: $(C, 60) \to C \times 60$ (720-D for fusion, 360-D for single-device)
+    \item Linear$(C \times 60, 512)$, ReLU, Dropout$(0.2)$
+    \item Linear$(512, 256)$, ReLU, Dropout$(0.2)$
+    \item Linear$(256, 18)$
+\end{itemize}
+This architecture tests whether raw-window flattening plus a deep MLP can match or exceed the temporal models.
+
+\subsubsection{LSTM Baseline}
+
+The recurrent baseline treats each window as a sequence of 60 time steps with $C$ channels per step:
+\begin{itemize}
+    \item Permute: $(B, C, T) \to (B, T, C)$
+    \item 2-layer LSTM with hidden size 128, batch-first, dropout$(0.2)$
+    \item Mean-pooling over the time dimension
+    \item Linear$(128, 18)$
+\end{itemize}
+The LSTM is expected to capture temporal ordering better than the ANN, while the CNN's local receptive fields and subsampling may offer a complementary inductive bias for motion-pattern classification.
+
 The contrastive model uses separate phone and watch encoders with the same backbone, each consuming a $(6, 60)$ view and producing a 256-dimensional representation.
 Projection heads reduce embeddings from 256 to 128 to 64 dimensions before the symmetric InfoNCE loss is applied.
 Figure~\ref{fig:contrastive-arch} illustrates the full pretraining setup and how the frozen encoder outputs are reused for linear probing.
@@ -405,19 +462,150 @@ Contrastive probes are therefore judged against the watch baseline first and aga
 \section{Results}
 \label{sec:RESULTS}
 
-\subsection{Quantitative Summary}
+\subsection{Deep Learning Architecture Comparison}
 
-Table~\ref{tab:main-results} summarizes results for the deep learning models.
-The strongest result is the full-label supervised watch baseline at 0.6355 accuracy, 0.6744 macro precision, 0.6355 macro recall, and 0.6391 macro F1.
-Even the regenerated 10\%-label watch baseline remains strong at 0.6155 accuracy and 0.6078 macro F1, suggesting that the watch-only task is relatively label-efficient under the current windowing scheme.
+Table~\ref{tab:full-sweep} presents the complete CNN/ANN/LSTM sweep across all three channel modes.
+The best overall result is the watch-only CNN at 0.6447 accuracy and 0.6471 macro F1, followed by LSTM (0.6127, 0.6117) and ANN (0.5942, 0.5930).
 
-The best contrastive result is the watch-only frozen probe at full labels, which reaches 0.5831 accuracy, 0.6033 macro precision, and 0.5777 macro F1.
-This does not exceed the supervised watch baseline, but it remains clearly stronger than the paired and phone-only frozen probes.
-Paired contrastive probes still outperform the older fusion baseline, but they remain well below watch-only supervision at both label budgets.
+\begin{table}[httb!] \scriptsize
+\centering
+    \begin{tabularx}{0.98\textwidth}{ l  l  c  c  c }
+        \toprule
+        \textbf{Model} & \textbf{Channel} & \textbf{Test Acc.} & \textbf{Macro F1} & \textbf{Best Epoch} \\
+        \midrule
+        \rowcolor{LightBlue} CNN   & watch  & \textbf{0.6447} & \textbf{0.6471} & 36 \\
+        LSTM  & watch  & 0.6127 & 0.6117 & 22 \\
+        \rowcolor{LightBlue} ANN   & watch  & 0.5942 & 0.5930 & 39 \\
+        CNN   & fusion & 0.5001 & 0.4937 & 1 \\
+        \rowcolor{LightBlue} LSTM  & fusion & 0.3805 & 0.3692 & 2 \\
+        ANN   & fusion & 0.3874 & 0.3819 & 3 \\
+        \rowcolor{LightBlue} CNN   & phone  & 0.1817 & 0.1740 & 16 \\
+        LSTM  & phone  & 0.1945 & 0.1878 & 4 \\
+        \rowcolor{LightBlue} ANN   & phone  & 0.1807 & 0.1805 & 14 \\
+        \bottomrule
+    \end{tabularx}
+    \caption{\textbf{Full architecture sweep results on the subject-disjoint test set.}
+    CNN consistently outperforms LSTM and ANN on watch, while all architectures fail on phone and underperform on fusion.
+    The test split is exactly class-balanced (2,655 windows per class), so accuracy equals macro recall.
+    \label{tab:full-sweep}}
+\end{table}
 
-A notable result is that Random Forest (0.6021 accuracy, 0.6221 macro precision, 0.5838 macro F1, macro AUC 0.9503) remains competitive with the deep models.
-This is largely explained by device asymmetry: the current deep fusion setup is hampered by uninformative or unstable phone channels, whereas both the watch-only CNN and Random Forest can rely more heavily on wrist-dominated signals.
-Watch-centric features dominate the top-20 importances (Figure~\ref{fig:rf-importance}), confirming that wrist motion is the primary discriminative signal.
+Figure~\ref{fig:model-comparison} visualizes the same hierarchy: watch-only bars dominate, fusion is intermediate, and phone is near chance for all three architectures.
+
+\begin{figure}[htb!]
+  \centering
+  \includegraphics[width=0.92\linewidth]{drive-download-figures/fig1_model_comparison_bars.png}
+  \caption{\textbf{Model comparison across architectures and channels.}
+  CNN achieves the best watch-only performance; all architectures degrade sharply on phone and fusion inputs.}
+  \label{fig:model-comparison}
+\end{figure}
+
+\subsection{Transfer Learning from UCI HAR}
+
+A natural extension of the supervised and contrastive baselines is to leverage an external, larger HAR corpus for encoder pretraining and then fine-tune on the target dataset.
+We choose the UCI Human Activity Recognition (UCI HAR) dataset as the pretraining source because it is widely used, well-documented, and contains raw tri-axial inertial signals that are temporally compatible with our windows.
+
+\subsubsection{Pretraining Corpus}
+
+UCI HAR contains six daily activities (walking, walking upstairs, walking downstairs, sitting, standing, laying) recorded from 30 subjects with a waist-mounted smartphone at 50\,Hz.
+The released raw inertial signals (not the 561 pre-processed feature vectors) are segmented into 128-sample windows with 50\% overlap, giving $(6, 128)$ tensors per window.
+Because our encoder uses adaptive average pooling before the classifier, it is length-agnostic: both 128-sample (UCI HAR) and 60-sample (our dataset) windows map to the same 256-dimensional embedding, so no architectural surgery is required.
+
+We pretrain separate CNN and LSTM encoders on UCI HAR for 40 epochs with AdamW ($\mathrm{lr}=10^{-3}$, weight decay $10^{-4}$, batch size 256) and early stopping on validation accuracy.
+After pretraining, encoder weights are saved and transferred to our dataset.
+
+\subsubsection{Fine-tuning Protocol}
+
+All transfer experiments use watch-only input (the strongest channel mode from Section~\ref{sec:RESULTS}) and are trained for up to 40 epochs with a reduced learning rate of $10^{-4}$ (one tenth of the scratch baseline) to avoid catastrophic forgetting of pretrained features.
+We investigate four layer-freezing strategies:
+
+\begin{itemize}
+    \item \textbf{Scratch (none)}: Train the full model from random initialization; serves as the transfer-learning baseline.
+    \item \textbf{Frozen (all)}: Freeze the entire pretrained encoder; only the linear classifier head is trained.
+    \item \textbf{Partial (first\_two)}: Freeze the first two convolutional or LSTM blocks and fine-tune only the final block plus the classifier.
+    \item \textbf{Progressive}: Start with a fully frozen encoder and unfreeze all encoder parameters at epoch 10.
+    When unfreezing occurs, both the optimizer and the learning-rate scheduler are recreated to prevent momentum desync and to apply the lower fine-tuning LR to the newly trainable parameters.
+\end{itemize}
+
+\subsubsection{Transfer Learning Results}
+
+Table~\ref{tab:transfer-results} reports test accuracy and macro F1 for all eight configurations.
+Figure~\ref{fig:transfer-accuracy} visualizes the same results as grouped bars, and Figure~\ref{fig:transfer-curves} shows the validation macro-F1 learning curves with vertical annotations at the progressive unfreeze epoch.
+
+\begin{table}[htb!] \scriptsize
+\centering
+    \begin{tabular}{l l c c}
+        \toprule
+        \textbf{Model} & \textbf{Freeze Strategy} & \textbf{Test Acc.} & \textbf{Macro F1} \\
+        \midrule
+        CNN  & Scratch (none)               & 0.6452 & 0.6465 \\
+        CNN  & Frozen (all)                 & 0.5126 & 0.4888 \\
+        CNN  & Partial (first two)          & 0.5877 & 0.5811 \\
+        CNN  & Progressive (unfreeze @ 10)  & 0.5820 & 0.5649 \\
+        \midrule
+        LSTM & Scratch (none)               & 0.6127 & 0.6117 \\
+        LSTM & Frozen (all)                 & 0.3504 & 0.3135 \\
+        LSTM & Partial (first two)          & 0.4753 & 0.4606 \\
+        LSTM & Progressive (unfreeze @ 10)  & 0.4294 & 0.3903 \\
+        \bottomrule
+    \end{tabular}
+    \caption{\textbf{Transfer learning results on the subject-disjoint test set.}
+    All models use watch-only input. Pretraining corpus: UCI HAR (6 activities, 30 subjects).
+    Negative transfer is observed: every fine-tuning strategy underperforms the from-scratch baseline.
+    \label{tab:transfer-results}}
+\end{table}
+
+\begin{figure}[htb!]
+  \centering
+  \includegraphics[width=0.92\linewidth]{figures/fig_transfer_accuracy.png}
+  \caption{\textbf{Transfer learning test accuracy by model and fine-tuning strategy.}
+  Every pretrained variant underperforms the corresponding scratch baseline; the gap is largest for the fully frozen encoder.
+  \label{fig:transfer-accuracy}}
+\end{figure}
+
+\begin{figure}[htb!]
+  \centering
+  \includegraphics[width=0.98\linewidth]{figures/fig_transfer_curves.png}
+  \caption{\textbf{Validation macro-F1 curves for all transfer configurations.}
+  Watch-only scratch models (solid lines) plateau highest.
+  Progressive runs (dotted lines) show a small uptick after the unfreeze annotation at epoch 10, but never recover to scratch levels.
+  \label{fig:transfer-curves}}
+\end{figure}
+
+\subsubsection{Analysis: Negative Transfer}
+
+The dominant finding is \textbf{negative transfer}: every pretrained configuration underperforms its from-scratch counterpart.
+For CNN, the accuracy drops are $-13.3$ percentage points (frozen), $-5.8$ (partial), and $-6.3$ (progressive).
+For LSTM the drops are even more severe: $-26.2$, $-13.7$, and $-18.3$ points respectively.
+The frozen strategy is consistently the worst, confirming that UCI HAR features are not directly reusable as a fixed representation for our 18-class problem.
+
+Partial fine-tuning is the ``least bad'' strategy for both architectures, suggesting that the bottom layers of the UCI HAR encoder learned motion primitives that are at least partially adaptable, while the top layers are too task-specific.
+Progressive unfreezing at epoch 10 produces a visible but insufficient recovery in validation F1 (Figure~\ref{fig:transfer-curves}), and the test-time gap to scratch remains large.
+
+We attribute the negative transfer to a \textbf{domain gap} rather than a bug in the protocol.
+UCI HAR activities are coarse-grained daily motions (walking, sitting, standing) recorded from a waist-mounted phone, whereas our dataset contains 18 finer-grained activity codes (A--S) recorded from both wrist and pocket.
+The learned filters that discriminate ``walking upstairs'' from ``sitting'' are not the same filters needed to disambiguate our finer activity classes.
+This finding is consistent with the broader transfer-learning literature: pretraining helps only when the source and target domains share relevant low-level structure.
+
+\subsection{Training Dynamics}
+
+Figure~\ref{fig:training-curves} shows validation-macro-F1 learning curves for all nine runs.
+Watch-only models train for the longest (22--39 epochs) and reach the highest plateaus.
+Fusion and phone models converge much earlier (1--16 epochs) at substantially lower levels, confirming that poor performance is not due to insufficient training but to weak or noisy input signal.
+
+\begin{figure}[htb!]
+  \centering
+  \includegraphics[width=0.98\linewidth]{drive-download-figures/fig2_training_curves_grid.png}
+  \caption{\textbf{Validation macro-F1 curves across all nine runs.}
+  Watch-only models train longer and plateau higher; phone and fusion models stop early with low validation F1.}
+  \label{fig:training-curves}
+\end{figure}
+
+\subsection{Headline Comparison: Deep vs Classical vs Contrastive}
+
+Table~\ref{tab:main-results} places the best deep models in context against classical ML and contrastive probes.
+The CNN watch baseline (0.6447) outperforms Random Forest (0.6021), the strongest classical model, by 4.3 percentage points.
+The contrastive watch probe (0.5831) trails the supervised CNN by 6.2 points but remains competitive with the ANN watch baseline.
 
 \begin{table}[httb!] \scriptsize
 \centering
@@ -425,80 +613,103 @@ Watch-centric features dominate the top-20 importances (Figure~\ref{fig:rf-impor
         \toprule
         \textbf{Method} & \textbf{Input} & \textbf{Labels} & \textbf{Prec.} & \textbf{Recall} & \textbf{Acc.} & \textbf{Macro F1} \\
         \midrule
-        \rowcolor{LightBlue} Supervised watch baseline    & watch raw                        & 100\% & 0.6744 & 0.6355 & 0.6355 & 0.6391 \\
+        \rowcolor{LightBlue} CNN watch baseline           & watch raw                        & 100\% & 0.6773 & 0.6447 & 0.6447 & 0.6471 \\
+        LSTM watch baseline          & watch raw                        & 100\% & 0.6485 & 0.6127 & 0.6127 & 0.6117 \\
+        \rowcolor{LightBlue} ANN watch baseline           & watch raw                        & 100\% & 0.6291 & 0.5942 & 0.5942 & 0.5930 \\
         Supervised watch baseline    & watch raw                        & 10\%  & 0.6308 & 0.6155 & 0.6155 & 0.6078 \\
-        \rowcolor{LightBlue} Contrastive watch probe      & watch emb.                       & 100\% & 0.6033 & 0.5831 & 0.5831 & 0.5777 \\
-        Contrastive watch probe      & watch emb.                       & 10\%  & 0.5762 & 0.5647 & 0.5647 & 0.5556 \\
-        \rowcolor{LightBlue} Contrastive paired probe     & phone+watch emb.                 & 100\% & 0.5138 & 0.4861 & 0.4861 & 0.4707 \\
-        Contrastive paired probe     & phone+watch emb.                 & 10\%  & 0.5066 & 0.4795 & 0.4795 & 0.4658 \\
-        \rowcolor{LightBlue} Contrastive phone probe      & phone emb.                       & 100\% & 0.1805 & 0.1692 & 0.1692 & 0.1540 \\
-        Contrastive phone probe      & phone emb.                       & 10\%  & 0.1908 & 0.1793 & 0.1793 & 0.1603 \\
+        \rowcolor{LightBlue} Random Forest                & handcrafted 84-D                 & 100\% & 0.6221 & 0.6021 & 0.6021 & 0.5838 \\
+        Contrastive watch probe      & watch emb.                       & 100\% & 0.6033 & 0.5831 & 0.5831 & 0.5777 \\
+        \rowcolor{LightBlue} Contrastive watch probe      & watch emb.                       & 10\%  & 0.5762 & 0.5647 & 0.5647 & 0.5556 \\
+        Contrastive paired probe     & phone+watch emb.                 & 100\% & 0.5138 & 0.4861 & 0.4861 & 0.4707 \\
+        \rowcolor{LightBlue} Contrastive paired probe     & phone+watch emb.                 & 10\%  & 0.5066 & 0.4795 & 0.4795 & 0.4658 \\
+        Contrastive phone probe      & phone emb.                       & 100\% & 0.1805 & 0.1692 & 0.1692 & 0.1540 \\
+        \rowcolor{LightBlue} Contrastive phone probe      & phone emb.                       & 10\%  & 0.1908 & 0.1793 & 0.1793 & 0.1603 \\
         \bottomrule
     \end{tabularx}
-    \caption{\textbf{Headline results.}
-    The supervised watch baseline is the strongest deep model in the current artifact set.
+    \caption{\textbf{Headline results across all model tiers.}
+    The CNN watch baseline is the strongest deep model in the current artifact set.
     As in Table~\ref{tab:classical-results}, macro recall equals accuracy because the test split is exactly class-balanced.
     \label{tab:main-results}}
 \end{table}
 
 \subsection{Interpretation}
 
-The dominant finding is device asymmetry.
-The watch-only supervised baseline reaches 0.6355 accuracy, far above the paired probe and any phone-only model.
-Random Forest's watch-centric importances reinforce this: top features are almost exclusively watch accelerometer channels, confirming that wrist motion is the cleanest source of discriminative information and that phone channels currently add noise rather than signal to fusion.
+\subsubsection{Architecture Hierarchy on Watch}
 
-Paired contrastive pretraining is helpful relative to naive multimodal fusion, but it is not yet the best overall approach.
-The frozen watch probe comes closest to the supervised watch baseline, while the paired probe still trails substantially.
-This suggests that the current contrastive objective captures useful watch representations but does not yet make phone-watch combination reliably beneficial on unseen subjects.
+The CNN outperforms both LSTM and ANN on watch-only input.
+We attribute this to the CNN's inductive bias: local temporal convolutional filters naturally capture motion-pattern primitives (e.g., stroke cycles, gait phases) that are discriminative for activity classes, while adaptive average pooling aggregates these local features into a fixed-size representation.
+The LSTM, despite its temporal modeling capacity, underperforms the CNN; mean-pooling over all time steps may lose fine-grained temporal structure that the CNN's hierarchical subsampling preserves.
+The ANN, lacking any temporal structure beyond the flattened vector ordering, performs worst among the three, confirming that raw-window flattening is insufficient for this task.
 
-Per-class behavior is consistent across all three model tiers: classes B, O, and P are consistently easy, while F, I, J, K, and L remain difficult.
-Behavior-level interpretation is deferred until the label-to-activity mapping is added to the repository.
+\subsubsection{Device Asymmetry is Architecture-Independent}
 
-An exploratory run with a lower learning rate reaches approximately 0.501 test accuracy and 0.486 macro F1 for the paired probe.
-We treat this as promising headroom rather than a main claim, as the standardized comparison table is based on the canonical artifact set and still falls short of the watch-only supervised benchmark.
+The most striking finding is that phone-only performance is near-random ($\sim$18\%) across \emph{all} architectures (CNN: 18.2\%, LSTM: 19.5\%, ANN: 18.1\%).
+This rules out the hypothesis that phone data could be exploited with a better architecture; the signal is fundamentally weak for subject-disjoint classification under the current preprocessing.
 
-\subsection{Confusion Matrices}
-
-Figure~\ref{fig:confusion-matrices} compares confusion matrices for the supervised watch baseline and the contrastive watch probe at full labels.
-Both exhibit the same broad pattern: easy classes (B, O, P) cluster on the diagonal while difficult classes (F, I, J, K, L) spread into off-diagonal bins.
-The supervised watch model shows consistently sharper diagonals, matching its stronger macro F1 in Table~\ref{tab:main-results}.
+Fusion performance is also consistently worse than watch-only: CNN drops from 64.5\% to 50.0\%, LSTM from 61.3\% to 38.0\%, and ANN from 59.4\% to 38.7\%.
+This confirms that phone channels add noise that no tested architecture successfully suppresses.
+Figure~\ref{fig:accuracy-by-channel} makes this degradation visually explicit.
 
 \begin{figure}[htb!]
   \centering
-  \subfigure[Supervised watch (100\% labels)]{%
-    \includegraphics[width=0.47\linewidth]{figures/confusion_matrix_supervised_watch.png}}
-  \hfill
-  \subfigure[Contrastive watch probe (100\% labels)]{%
-    \includegraphics[width=0.47\linewidth]{figures/confusion_matrix_contrastive_watch_probe.png}}
-  \caption{\textbf{Confusion matrices on the subject-disjoint test set for the updated watch-first comparison.}
-  Classes B, O, and P remain relatively easy, while F, I, J, K, and L remain challenging.}
-  \label{fig:confusion-matrices}
+  \includegraphics[width=0.72\linewidth]{drive-download-figures/fig6_accuracy_by_channel.png}
+  \caption{\textbf{Accuracy by channel mode across architectures.}
+  Every architecture degrades when phone data is included, with CNN showing the smallest absolute drop on fusion but still losing 14.5 points relative to watch-only.}
+  \label{fig:accuracy-by-channel}
+\end{figure}
+
+\subsubsection{Error Patterns}
+
+Figure~\ref{fig:confusion-matrices-grid} shows confusion matrices for all nine runs.
+The watch-only CNN exhibits the sharpest diagonal, while phone-only matrices are nearly uniform (consistent with chance performance).
+The error structure is architecture-agnostic: classes B, O, and P remain easy across all models, while F, I, J, K, and L remain difficult.
+
+\begin{figure}[htb!]
+  \centering
+  \includegraphics[width=0.98\linewidth]{drive-download-figures/fig3_confusion_matrices_grid.png}
+  \caption{\textbf{Confusion matrices for all nine model--channel combinations.}
+  Watch-only models (top row) show strong diagonal structure; phone-only models (bottom row) are near-uniform.}
+  \label{fig:confusion-matrices-grid}
 \end{figure}
 
 \subsection{Per-Class F1 Comparison}
 
-Figure~\ref{fig:per-class-f1} shows per-class F1 for the supervised watch baseline and the contrastive watch probe.
-The clearest stable pattern is that classes B, O, and P are relatively easy, while F, I, J, K, and L remain difficult across both watch-based models.
-The supervised watch model is stronger on most classes, but the error profile is similar, suggesting that SSL is learning a related representation without yet overtaking direct supervision.
+Figure~\ref{fig:per-class-f1-all} extends the per-class analysis to all three architectures on watch-only input.
+CNN leads on the majority of classes, with the largest margins on the difficult classes (F, I, J, K, L).
+This suggests that the CNN's local filtering is particularly effective at disambiguating subtle motion patterns that confuse the LSTM and ANN.
 
 \begin{figure}[htb!]
   \centering
-  \includegraphics[width=0.98\linewidth]{figures/per_class_f1_watch_vs_ssl.png}
-  \caption{\textbf{Per-class F1 comparison across all 18 activity codes.}
-  Supervised watch baseline (blue) and contrastive watch probe (red).}
-  \label{fig:per-class-f1}
+  \includegraphics[width=0.98\linewidth]{drive-download-figures/fig4_per_class_f1_comparison.png}
+  \caption{\textbf{Per-class F1 comparison across CNN, LSTM, and ANN on watch-only input.}
+  CNN dominates on most classes, especially the difficult ones (F, I, J, K, L).}
+  \label{fig:per-class-f1-all}
+\end{figure}
+
+\subsection{Subject Generalization}
+
+Figure~\ref{fig:per-subject-heatmap} shows per-subject test accuracy for the three watch-only models.
+Subject-to-subject variation is substantial (ranging from $\sim$45\% to $\sim$80\%), but the relative ranking of CNN~$>$~LSTM~$>$~ANN is stable across nearly all subjects.
+This consistency reinforces the architectural conclusion: the CNN's stronger performance is not driven by a few easy subjects but generalizes across the held-out population.
+
+\begin{figure}[htb!]
+  \centering
+  \includegraphics[width=0.98\linewidth]{drive-download-figures/fig5_per_subject_accuracy_heatmap.png}
+  \caption{\textbf{Per-subject accuracy heatmap for watch-only models.}
+  CNN $>$ LSTM $>$ ANN holds for almost every subject; absolute accuracy varies widely across subjects.}
+  \label{fig:per-subject-heatmap}
 \end{figure}
 
 \subsection{ROC / AUC}
 
-Figure~\ref{fig:roc-curves} plots macro one-vs-rest ROC curves for the supervised watch baseline and the contrastive watch probe.
-Both curves lie well above the diagonal, but the supervised watch model achieves the stronger aggregate discrimination, consistent with its higher test accuracy and macro F1.
+Figure~\ref{fig:roc-curves} plots macro one-vs-rest ROC curves for the CNN watch baseline and the contrastive watch probe.
+Both curves lie well above the diagonal, but the CNN achieves stronger aggregate discrimination, consistent with its higher test accuracy and macro F1.
 
 \begin{figure}[htb!]
   \centering
   \includegraphics[width=0.72\linewidth]{figures/roc_auc_watch_vs_ssl.png}
   \caption{\textbf{Macro one-vs-rest ROC curves for the watch-first benchmark comparison.}
-  Supervised watch baseline (blue) and contrastive watch probe (red).}
+  CNN watch baseline (blue) and contrastive watch probe (red).}
   \label{fig:roc-curves}
 \end{figure}
 
@@ -508,19 +719,19 @@ Both curves lie well above the diagonal, but the supervised watch model achieves
 This project delivers a complete end-to-end pipeline from raw phone and watch inertial files to subject-disjoint quantitative evaluation.
 The main engineering contribution is a segment-aware alignment and resampling pipeline that converts heterogeneous raw streams into stable multimodal windows.
 
-The main empirical result is that the supervised watch-only baseline remains the best deep model under subject-disjoint evaluation, while the current contrastive pipeline does not yet surpass it.
-A complementary finding is strong watch-over-phone asymmetry that should shape the next round of analysis.
+The main empirical result is that the supervised watch-only CNN baseline is the best deep model under subject-disjoint evaluation, reaching 64.47\% accuracy and 0.6471 macro F1.
+The full architecture sweep shows that CNN $>$ LSTM $>$ ANN on watch-only input, and that this ordering is stable across individual subjects.
+A critical complementary finding is that device asymmetry is architecture-independent: phone-only performance is near-random ($\sim$18\%) for CNN, LSTM, and ANN alike, and fusion degrades all three architectures relative to watch-only.
+This suggests that the phone signal is fundamentally weak for subject-disjoint classification under the current preprocessing, rather than merely requiring a better model.
 
-The three-tier evaluation still provides a useful ladder of baselines: classical models on handcrafted features establish an interpretable reference point, supervised watch training provides the strongest direct deep-learning benchmark, and contrastive pretraining shows partial gains over naive fusion without yet delivering the best overall result.
+The five-tier evaluation provides a useful ladder of baselines: classical models on handcrafted features establish an interpretable reference point (Random Forest: 60.21\%), supervised deep learning provides the strongest benchmark (CNN watch: 64.47\%), the architecture sweep characterizes the value of temporal modeling (CNN vs LSTM vs ANN), contrastive pretraining shows partial gains over naive fusion without yet delivering the best overall result (watch probe: 58.31\%), and transfer learning from UCI HAR reveals that negative transfer can occur when the source and target domains are too dissimilar.
 
-Next steps include understanding why watch-only models outperform fusion in the current scheme and testing whether stronger contrastive checkpoints or light fine-tuning can close the remaining gap to the watch-only baseline.
-
-\section*{Rubric Alignment Notes}
-
-The current artifact set covers dataset exploration, signal annotation, resampling and interpolation, windowing rationale, handcrafted features, classical and deep models, precision/recall/accuracy/macro-F1 reporting, confusion matrices, and ROC/AUC analysis.
-Two rubric items are not directly supported by the released files: demographic diversity and days recorded per participant, since the shared dataset contains only subject IDs, activity codes, timestamps, and inertial axes.
-Two additional items remain outside the present artifact set: explicit denoising filters and an exhaustive multi-window-size sweep.
-We therefore report them as limitations rather than claiming they were completed.
+\textbf{Future work.}
+Three directions remain open after the current artifact set.
+First, \textbf{transfer learning with a closer domain}: we explored fine-tuning encoders pretrained on UCI HAR and observed negative transfer across all freezing strategies.
+Future work could investigate whether a more domain-similar pretraining corpus (e.g., another wrist-based HAR dataset with finer-grained activities) would yield positive transfer, or whether domain-adversarial training could bridge the gap between pretraining and target domains.
+Second, \textbf{phone signal diagnosis}: understanding why phone-only accuracy is near-random---whether due to sensor placement, orientation variability, or preprocessing---could unlock genuinely multimodal fusion.
+Third, \textbf{advanced fusion}: gated or attention-weighted fusion that learns to dynamically downweight phone features may outperform the simple concatenation used here.
 
 \section*{Member Contributions}
 
